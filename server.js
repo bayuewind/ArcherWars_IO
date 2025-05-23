@@ -10,9 +10,12 @@ const io = socketIo(server, {
     compression: true,              // 启用压缩
     perMessageDeflate: true,        // 启用消息压缩
     httpCompression: true,          // 启用HTTP压缩
-    transports: ['websocket'],      // 只使用websocket传输
     pingTimeout: 30000,             // 30秒ping超时
-    pingInterval: 10000             // 10秒ping间隔
+    pingInterval: 10000,            // 10秒ping间隔
+    cors: {
+        origin: "*",
+        methods: ["GET", "POST"]
+    }
 });
 
 // 静态文件服务
@@ -25,6 +28,7 @@ const GAME_CONFIG = {
     MAX_PLAYERS_PER_ROOM: 30,
     PLAYER_SPEED: 3,
     ARROW_SPEED: 8,
+    ARROW_RANGE: 400,  // 弓箭最大射程，从500减少到300
     ARROW_DAMAGE: 25,
     BASE_HP: 100,
     EXP_DROP_RATIO: 0.33,
@@ -252,19 +256,14 @@ function gameLoop() {
     
     for (let roomId in rooms) {
         const room = rooms[roomId];
-        let hasChanges = false;
         
         // 更新玩家回血
         for (let playerId in room.players) {
             const player = room.players[playerId];
             if (player.alive && player.healthRegen > 0) {
-                const oldHp = player.hp;
                 player.hp = Math.min(player.maxHp, player.hp + player.healthRegen / GAME_CONFIG.SERVER_TICK_RATE);
-                if (Math.abs(player.hp - oldHp) > 0.1) hasChanges = true;
             }
         }
-        
-        const oldArrowCount = room.arrows.length;
         
         // 更新箭矢
         room.arrows = room.arrows.filter(arrow => {
@@ -286,7 +285,7 @@ function gameLoop() {
             
             // 检查边界和反弹
             let bounced = false;
-            if (arrow.ricochetCount > arrow.bounceCount && arrow.range < 500) { // 还有反弹次数且射程未超限
+            if (arrow.ricochetCount > arrow.bounceCount && arrow.range < GAME_CONFIG.ARROW_RANGE) { // 还有反弹次数且射程未超限
                 if (arrow.x < 0 || arrow.x > GAME_CONFIG.MAP_WIDTH) {
                     arrow.angle = Math.PI - arrow.angle; // 水平反弹
                     arrow.x = Math.max(0, Math.min(GAME_CONFIG.MAP_WIDTH, arrow.x));
@@ -309,6 +308,11 @@ function gameLoop() {
                 }
             }
             
+            // 普通箭矢超过最大射程也会消失
+            if (arrow.range > GAME_CONFIG.ARROW_RANGE) {
+                return false;
+            }
+            
             // 检查障碍物碰撞和反弹
             if (checkObstacleCollision(arrow.x, arrow.y, room.obstacles)) {
                 if (arrow.ricochetCount > arrow.bounceCount) {
@@ -325,11 +329,6 @@ function gameLoop() {
                 }
             }
             
-            // 反弹箭矢超过最大射程也会消失
-            if (arrow.ricochetCount > 0 && arrow.range > 500) {
-                return false;
-            }
-            
             // 检查玩家碰撞
             for (let playerId in room.players) {
                 const player = room.players[playerId];
@@ -337,11 +336,9 @@ function gameLoop() {
                     checkCollision(arrow, player, 10, 20)) {
                     
                     player.hp -= arrow.damage;
-                    hasChanges = true;
                     
                     if (player.hp <= 0) {
                         handlePlayerDeath(playerId, arrow.shooterId, roomId);
-                        hasChanges = true;
                     }
                     
                     if (!arrow.piercing) {
@@ -353,24 +350,13 @@ function gameLoop() {
             return true;
         });
         
-        // 检查箭矢数量变化
-        if (room.arrows.length !== oldArrowCount) {
-            hasChanges = true;
-        }
-        
-        // 优化的数据传输策略
-        const shouldSendFullState = gameTickCounter % GAME_CONFIG.STATE_SYNC_INTERVAL === 0 || hasChanges;
-        
-        if (shouldSendFullState) {
-            // 压缩游戏状态数据
-            const compressedState = {
-                p: compressPlayers(room.players), // 压缩玩家数据
-                a: compressArrows(room.arrows),   // 压缩箭矢数据
-                e: room.expBeans.length > 50 ? room.expBeans.slice(0, 50) : room.expBeans, // 限制经验豆数量
-                t: gameTickCounter // 时间戳用于客户端插值
-            };
-            
-            io.to(roomId).emit('gameState', compressedState);
+        // 暂时使用原始的gameState发送，但保持20FPS
+        if (room.playerCount > 0) {
+            io.to(roomId).emit('gameState', {
+                players: room.players,
+                arrows: room.arrows,
+                expBeans: room.expBeans
+            });
         }
     }
 }
@@ -390,7 +376,8 @@ function compressPlayers(players) {
             e: p.exp,
             l: p.level,
             k: p.kills,
-            v: p.alive
+            v: p.alive,
+            s: p.speed  // 添加速度字段
         };
     }
     return compressed;
@@ -412,6 +399,8 @@ io.on('connection', (socket) => {
     console.log('玩家连接:', socket.id);
     
     socket.on('joinGame', (playerName) => {
+        console.log(`收到 joinGame 请求: ${playerName} (${socket.id})`);
+        
         const roomId = findAvailableRoom();
         const player = createPlayer(socket.id, playerName, roomId);
         
@@ -427,6 +416,8 @@ io.on('connection', (socket) => {
         
         socket.join(roomId);
         
+        console.log(`玩家 ${playerName} 创建完成，位置: (${player.x}, ${player.y})`);
+        
         // 发送初始游戏数据
         socket.emit('gameJoined', {
             playerId: socket.id,
@@ -435,6 +426,7 @@ io.on('connection', (socket) => {
             config: GAME_CONFIG
         });
         
+        console.log(`发送 gameJoined 事件给玩家 ${playerName}`);
         console.log(`玩家 ${playerName} 加入房间 ${roomId}`);
     });
     

@@ -33,24 +33,61 @@ class ArcherBattleGame {
         this.lastPlayerState = null;
         this.moveSendInterval = 50; // 50ms发送一次移动数据 (20FPS)
         
+        // 添加Socket.IO连接调试
+        this.socket.on('connect', () => {
+            console.log('Socket.IO 连接成功:', this.socket.id);
+        });
+        
+        this.socket.on('disconnect', () => {
+            console.log('Socket.IO 连接断开');
+        });
+        
+        this.socket.on('connect_error', (error) => {
+            console.error('Socket.IO 连接错误:', error);
+        });
+        
         this.initializeEvents();
     }
     
     initializeEvents() {
         // Socket事件
         this.socket.on('gameJoined', (data) => {
+            console.log('收到 gameJoined 事件:', data);
             this.playerId = data.playerId;
             this.obstacles = data.obstacles;
             this.gameConfig = data.config;
+            console.log('开始游戏，玩家ID:', this.playerId);
             this.startGame();
         });
         
         this.socket.on('gameState', (state) => {
-            // 解压缩数据
-            this.players = this.decompressPlayers(state.p);
-            this.arrows = this.decompressArrows(state.a);
-            this.expBeans = state.e;
+            // 添加调试信息
+            console.log('接收到游戏状态:', state);
+            
+            // 检查数据格式
+            if (!state) {
+                console.error('游戏状态数据为空:', state);
+                return;
+            }
+            
+            // 直接使用原始数据，而不是压缩数据
+            if (state.players) {
+                this.players = state.players;
+                this.arrows = state.arrows || [];
+                this.expBeans = state.expBeans || [];
+            } else if (state.p) {
+                // 如果收到压缩数据，解压缩
+                this.players = this.decompressPlayers(state.p);
+                this.arrows = this.decompressArrows(state.a || []);
+                this.expBeans = state.e || [];
+            }
+            
             this.currentPlayer = this.players[this.playerId];
+            
+            // 添加调试信息
+            console.log('当前玩家:', this.currentPlayer);
+            console.log('玩家数量:', Object.keys(this.players).length);
+            
             this.updateUI();
         });
         
@@ -554,7 +591,8 @@ class ArcherBattleGame {
                 exp: p.e,
                 level: p.l,
                 kills: p.k,
-                alive: p.v
+                alive: p.v,
+                speed: p.s || 3  // 添加速度字段，如果没有则使用默认值
             };
         }
         return players;
@@ -577,17 +615,34 @@ let game;
 
 // 加入游戏函数
 function joinGame() {
+    console.log('joinGame 函数被调用');
+    
     const playerName = document.getElementById('playerName').value.trim();
+    console.log('玩家名字:', playerName);
+    
     if (playerName === '') {
         alert('请输入你的名字！');
         return;
     }
     
     if (!game) {
+        console.log('创建新的游戏实例');
         game = new ArcherBattleGame();
     }
     
-    game.socket.emit('joinGame', playerName);
+    console.log('Socket.IO 连接状态:', game.socket.connected);
+    
+    // 确保连接后再发送事件
+    if (game.socket.connected) {
+        console.log('Socket已连接，发送 joinGame 事件');
+        game.socket.emit('joinGame', playerName);
+    } else {
+        console.log('Socket未连接，等待连接...');
+        game.socket.on('connect', () => {
+            console.log('Socket连接成功，发送 joinGame 事件');
+            game.socket.emit('joinGame', playerName);
+        });
+    }
 }
 
 // 添加淡入淡出动画
