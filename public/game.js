@@ -28,6 +28,11 @@ class ArcherBattleGame {
         this.lastTime = 0;
         this.gameRunning = false;
         
+        // 网络优化
+        this.lastMoveSent = 0;
+        this.lastPlayerState = null;
+        this.moveSendInterval = 50; // 50ms发送一次移动数据 (20FPS)
+        
         this.initializeEvents();
     }
     
@@ -41,9 +46,10 @@ class ArcherBattleGame {
         });
         
         this.socket.on('gameState', (state) => {
-            this.players = state.players;
-            this.arrows = state.arrows;
-            this.expBeans = state.expBeans;
+            // 解压缩数据
+            this.players = this.decompressPlayers(state.p);
+            this.arrows = this.decompressArrows(state.a);
+            this.expBeans = state.e;
             this.currentPlayer = this.players[this.playerId];
             this.updateUI();
         });
@@ -158,26 +164,35 @@ class ArcherBattleGame {
             const length = Math.sqrt(moveX * moveX + moveY * moveY);
             moveX = (moveX / length) * player.speed;
             moveY = (moveY / length) * player.speed;
-            
-            const newX = player.x + moveX;
-            const newY = player.y + moveY;
-            
-            // 计算瞄准角度
-            const angle = Math.atan2(this.mouse.worldY - player.y, this.mouse.worldX - player.x);
-            
+        }
+        
+        const newX = player.x + moveX;
+        const newY = player.y + moveY;
+        
+        // 计算瞄准角度
+        const angle = Math.atan2(this.mouse.worldY - player.y, this.mouse.worldX - player.x);
+        
+        // 网络优化：只在必要时发送移动数据
+        const now = Date.now();
+        const shouldSendMove = now - this.lastMoveSent > this.moveSendInterval;
+        
+        // 检查是否有实际移动或角度变化
+        const hasMovement = moveX !== 0 || moveY !== 0;
+        const hasAngleChange = !this.lastPlayerState || 
+            Math.abs(angle - this.lastPlayerState.angle) > 0.1;
+        const hasPositionChange = !this.lastPlayerState ||
+            Math.abs(newX - this.lastPlayerState.x) > 1 ||
+            Math.abs(newY - this.lastPlayerState.y) > 1;
+        
+        if (shouldSendMove && (hasMovement || hasAngleChange || hasPositionChange)) {
             this.socket.emit('playerMove', {
                 x: newX,
                 y: newY,
                 angle: angle
             });
-        } else {
-            // 即使不移动也要更新角度
-            const angle = Math.atan2(this.mouse.worldY - player.y, this.mouse.worldX - player.x);
-            this.socket.emit('playerMove', {
-                x: player.x,
-                y: player.y,
-                angle: angle
-            });
+            
+            this.lastMoveSent = now;
+            this.lastPlayerState = { x: newX, y: newY, angle: angle };
         }
     }
     
@@ -521,6 +536,39 @@ class ArcherBattleGame {
         setTimeout(() => {
             document.body.removeChild(notification);
         }, 3000);
+    }
+    
+    // 解压缩玩家数据
+    decompressPlayers(compressedPlayers) {
+        const players = {};
+        for (let playerId in compressedPlayers) {
+            const p = compressedPlayers[playerId];
+            players[playerId] = {
+                id: playerId,
+                name: p.n,
+                x: p.x,
+                y: p.y,
+                angle: p.a,
+                hp: p.h,
+                maxHp: p.m,
+                exp: p.e,
+                level: p.l,
+                kills: p.k,
+                alive: p.v
+            };
+        }
+        return players;
+    }
+    
+    // 解压缩箭矢数据
+    decompressArrows(compressedArrows) {
+        return compressedArrows.map(a => ({
+            id: a.i,
+            x: a.x,
+            y: a.y,
+            angle: a.a,
+            shooterId: a.s
+        }));
     }
 }
 

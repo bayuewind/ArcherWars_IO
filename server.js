@@ -6,7 +6,14 @@ const { v4: uuidv4 } = require('uuid');
 
 const app = express();
 const server = http.createServer(app);
-const io = socketIo(server);
+const io = socketIo(server, {
+    compression: true,              // 启用压缩
+    perMessageDeflate: true,        // 启用消息压缩
+    httpCompression: true,          // 启用HTTP压缩
+    transports: ['websocket'],      // 只使用websocket传输
+    pingTimeout: 30000,             // 30秒ping超时
+    pingInterval: 10000             // 10秒ping间隔
+});
 
 // 静态文件服务
 app.use(express.static(path.join(__dirname, 'public')));
@@ -21,12 +28,15 @@ const GAME_CONFIG = {
     ARROW_DAMAGE: 25,
     BASE_HP: 100,
     EXP_DROP_RATIO: 0.33,
-    UPGRADE_EXP_COST: [100, 200, 400, 800, 1600]
+    UPGRADE_EXP_COST: [100, 200, 400, 800, 1600],
+    SERVER_TICK_RATE: 20,  // 降低到20FPS以减少带宽
+    STATE_SYNC_INTERVAL: 3  // 每3个tick同步一次完整状态
 };
 
 // 游戏状态
 let rooms = {};
 let playerRooms = {}; // playerId -> roomId
+let gameTickCounter = 0;  // 游戏tick计数器
 
 // 升级选项
 const UPGRADE_OPTIONS = {
@@ -60,7 +70,7 @@ function generateObstacles(roomId) {
 // 生成经验豆
 function generateExpBeans(roomId) {
     const beans = [];
-    const numBeans = 100;
+    const numBeans = 50; // 减少经验豆数量从100到50
     
     for (let i = 0; i < numBeans; i++) {
         beans.push({
@@ -238,16 +248,23 @@ function handlePlayerDeath(playerId, killerId, roomId) {
 
 // 游戏主循环
 function gameLoop() {
+    gameTickCounter++;
+    
     for (let roomId in rooms) {
         const room = rooms[roomId];
+        let hasChanges = false;
         
         // 更新玩家回血
         for (let playerId in room.players) {
             const player = room.players[playerId];
             if (player.alive && player.healthRegen > 0) {
-                player.hp = Math.min(player.maxHp, player.hp + player.healthRegen / 60); // 60 FPS
+                const oldHp = player.hp;
+                player.hp = Math.min(player.maxHp, player.hp + player.healthRegen / GAME_CONFIG.SERVER_TICK_RATE);
+                if (Math.abs(player.hp - oldHp) > 0.1) hasChanges = true;
             }
         }
+        
+        const oldArrowCount = room.arrows.length;
         
         // 更新箭矢
         room.arrows = room.arrows.filter(arrow => {
@@ -320,9 +337,11 @@ function gameLoop() {
                     checkCollision(arrow, player, 10, 20)) {
                     
                     player.hp -= arrow.damage;
+                    hasChanges = true;
                     
                     if (player.hp <= 0) {
                         handlePlayerDeath(playerId, arrow.shooterId, roomId);
+                        hasChanges = true;
                     }
                     
                     if (!arrow.piercing) {
@@ -334,13 +353,58 @@ function gameLoop() {
             return true;
         });
         
-        // 发送游戏状态
-        io.to(roomId).emit('gameState', {
-            players: room.players,
-            arrows: room.arrows,
-            expBeans: room.expBeans
-        });
+        // 检查箭矢数量变化
+        if (room.arrows.length !== oldArrowCount) {
+            hasChanges = true;
+        }
+        
+        // 优化的数据传输策略
+        const shouldSendFullState = gameTickCounter % GAME_CONFIG.STATE_SYNC_INTERVAL === 0 || hasChanges;
+        
+        if (shouldSendFullState) {
+            // 压缩游戏状态数据
+            const compressedState = {
+                p: compressPlayers(room.players), // 压缩玩家数据
+                a: compressArrows(room.arrows),   // 压缩箭矢数据
+                e: room.expBeans.length > 50 ? room.expBeans.slice(0, 50) : room.expBeans, // 限制经验豆数量
+                t: gameTickCounter // 时间戳用于客户端插值
+            };
+            
+            io.to(roomId).emit('gameState', compressedState);
+        }
     }
+}
+
+// 压缩玩家数据函数
+function compressPlayers(players) {
+    const compressed = {};
+    for (let playerId in players) {
+        const p = players[playerId];
+        compressed[playerId] = {
+            n: p.name,
+            x: Math.round(p.x),
+            y: Math.round(p.y),
+            a: Math.round(p.angle * 100) / 100, // 保留2位小数
+            h: Math.round(p.hp),
+            m: p.maxHp,
+            e: p.exp,
+            l: p.level,
+            k: p.kills,
+            v: p.alive
+        };
+    }
+    return compressed;
+}
+
+// 压缩箭矢数据函数
+function compressArrows(arrows) {
+    return arrows.map(arrow => ({
+        i: arrow.id,
+        x: Math.round(arrow.x),
+        y: Math.round(arrow.y),
+        a: Math.round(arrow.angle * 100) / 100,
+        s: arrow.shooterId
+    }));
 }
 
 // Socket连接处理
@@ -382,12 +446,18 @@ io.on('connection', (socket) => {
         const newX = Math.max(20, Math.min(GAME_CONFIG.MAP_WIDTH - 20, data.x));
         const newY = Math.max(20, Math.min(GAME_CONFIG.MAP_HEIGHT - 20, data.y));
         
-        if (!checkObstacleCollision(newX, newY, rooms[roomId].obstacles)) {
+        // 检查是否有实际变化，避免不必要的更新
+        const hasPositionChange = Math.abs(player.x - newX) > 0.5 || Math.abs(player.y - newY) > 0.5;
+        const hasAngleChange = Math.abs(player.angle - data.angle) > 0.05;
+        
+        if (hasPositionChange && !checkObstacleCollision(newX, newY, rooms[roomId].obstacles)) {
             player.x = newX;
             player.y = newY;
         }
         
-        player.angle = data.angle;
+        if (hasAngleChange) {
+            player.angle = data.angle;
+        }
     });
     
     socket.on('shoot', () => {
@@ -486,7 +556,7 @@ io.on('connection', (socket) => {
 });
 
 // 启动游戏循环
-setInterval(gameLoop, 1000 / 60); // 60 FPS
+setInterval(gameLoop, 1000 / GAME_CONFIG.SERVER_TICK_RATE); // 20 FPS
 
 // 启动服务器
 const PORT = process.env.PORT || 3000;
