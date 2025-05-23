@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>弓箭手大作战 - 多人在线游戏</title>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Orbitron', monospace;
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            color: white;
+            overflow: hidden;
+            user-select: none;
+        }
+        
+        #gameContainer {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        
+        #gameCanvas {
+            border: 3px solid #fff;
+            border-radius: 10px;
+            box-shadow: 0 0 30px rgba(255, 255, 255, 0.3);
+            background: #0a0a0a;
+        }
+        
+        #loginScreen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.9);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+        
+        #loginForm {
+            background: linear-gradient(145deg, #2a4a8a, #1e3c72);
+            padding: 40px;
+            border-radius: 20px;
+            border: 2px solid #4fc3f7;
+            box-shadow: 0 10px 40px rgba(79, 195, 247, 0.3);
+            text-align: center;
+            max-width: 400px;
+            width: 90%;
+        }
+        
+        h1 {
+            color: #4fc3f7;
+            margin-bottom: 30px;
+            font-size: 2.5em;
+            text-shadow: 0 0 20px rgba(79, 195, 247, 0.8);
+            animation: glow 2s ease-in-out infinite alternate;
+        }
+        
+        @keyframes glow {
+            from { text-shadow: 0 0 20px #4fc3f7; }
+            to { text-shadow: 0 0 30px #4fc3f7, 0 0 40px #4fc3f7; }
+        }
+        
+        input[type="text"] {
+            width: 100%;
+            padding: 15px;
+            margin-bottom: 20px;
+            border: 2px solid #4fc3f7;
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+            font-size: 16px;
+            font-family: inherit;
+            text-align: center;
+        }
+        
+        input[type="text"]:focus {
+            outline: none;
+            border-color: #29b6f6;
+            box-shadow: 0 0 20px rgba(41, 182, 246, 0.5);
+        }
+        
+        button {
+            background: linear-gradient(45deg, #4fc3f7, #29b6f6);
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            font-size: 18px;
+            font-weight: bold;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-family: inherit;
+            text-transform: uppercase;
+        }
+        
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(79, 195, 247, 0.4);
+        }
+        
+        #gameUI {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 100;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 20px;
+            border-radius: 15px;
+            border: 2px solid #4fc3f7;
+            min-width: 250px;
+        }
+        
+        .stat-item {
+            margin-bottom: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .stat-label {
+            color: #4fc3f7;
+            font-weight: bold;
+        }
+        
+        .stat-value {
+            color: #fff;
+            font-weight: bold;
+        }
+        
+        .health-bar, .exp-bar {
+            width: 150px;
+            height: 20px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 10px;
+            overflow: hidden;
+            border: 1px solid #4fc3f7;
+        }
+        
+        .health-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #4caf50, #8bc34a);
+            transition: width 0.3s ease;
+        }
+        
+        .exp-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #ff9800, #ffc107);
+            transition: width 0.3s ease;
+        }
+        
+        #upgradeModal {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: linear-gradient(145deg, #2a4a8a, #1e3c72);
+            padding: 30px;
+            border-radius: 20px;
+            border: 3px solid #4fc3f7;
+            z-index: 1001;
+            display: none;
+            min-width: 400px;
+        }
+        
+        .upgrade-option {
+            background: rgba(255, 255, 255, 0.1);
+            margin: 10px 0;
+            padding: 15px;
+            border-radius: 10px;
+            border: 2px solid #4fc3f7;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .upgrade-option:hover {
+            background: rgba(79, 195, 247, 0.2);
+            transform: scale(1.05);
+        }
+        
+        #minimap {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            width: 200px;
+            height: 200px;
+            border: 2px solid #4fc3f7;
+            border-radius: 10px;
+            background: rgba(0, 0, 0, 0.8);
+        }
+        
+        #leaderboard {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 15px;
+            border-radius: 15px;
+            border: 2px solid #4fc3f7;
+            min-width: 200px;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        
+        .leader-item {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 5px;
+            color: #fff;
+        }
+        
+        .leader-name {
+            color: #4fc3f7;
+        }
+        
+        #instructions {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 15px;
+            border-radius: 15px;
+            border: 2px solid #4fc3f7;
+            max-width: 300px;
+        }
+        
+        .instruction-item {
+            margin-bottom: 5px;
+            color: #ccc;
+        }
+        
+        .key {
+            color: #4fc3f7;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <canvas id="gameCanvas" width="1200" height="800"></canvas>
+        
+        <div id="loginScreen">
+            <div id="loginForm">
+                <h1>🏹 弓箭手大作战</h1>
+                <p style="margin-bottom: 20px; color: #ccc;">多人在线射击游戏</p>
+                <input type="text" id="playerName" placeholder="输入你的名字" maxlength="15">
+                <button onclick="joinGame()">开始游戏</button>
+            </div>
+        </div>
+        
+        <div id="gameUI" style="display: none;">
+            <div class="stat-item">
+                <span class="stat-label">生命值:</span>
+                <div class="health-bar">
+                    <div class="health-fill" id="healthFill"></div>
+                </div>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">经验值:</span>
+                <div class="exp-bar">
+                    <div class="exp-fill" id="expFill"></div>
+                </div>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">等级:</span>
+                <span class="stat-value" id="levelValue">1</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">击杀:</span>
+                <span class="stat-value" id="killsValue">0</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">房间:</span>
+                <span class="stat-value" id="roomPlayers">1/30</span>
+            </div>
+        </div>
+        
+        <div id="upgradeModal">
+            <h3 style="text-align: center; margin-bottom: 20px; color: #4fc3f7;">选择升级</h3>
+            <div id="upgradeOptions"></div>
+        </div>
+        
+        <canvas id="minimap"></canvas>
+        
+        <div id="leaderboard">
+            <h4 style="text-align: center; margin-bottom: 10px; color: #4fc3f7;">排行榜</h4>
+            <div id="leaderboardList"></div>
+        </div>
+        
+        <div id="instructions">
+            <h4 style="color: #4fc3f7; margin-bottom: 10px;">操作说明</h4>
+            <div class="instruction-item"><span class="key">WASD</span> - 移动</div>
+            <div class="instruction-item"><span class="key">鼠标</span> - 瞄准</div>
+            <div class="instruction-item"><span class="key">左键</span> - 射击</div>
+            <div class="instruction-item"><span class="key">F</span> - 收集经验豆</div>
+        </div>
+    </div>
+    
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="game.js"></script>
+</body>
+</html> 
